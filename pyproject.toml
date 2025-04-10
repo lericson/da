@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "da"
+version = "0.1"
+description = "Minimialist reproducer of Distance Advantage"
+authors = [{name = "Ludvig Ericson", email = "ludvig@lericson.se"},
+           {name = "José Pedro", email = "jmdap@kth.se"}]
+license = {text = "Ask me and I'll tell you"}
+#webpage = "https://lericson.se/da/"
+dependencies = [
+  "numba",
+  "numpy",
+  "scipy",
+  "tqdm",
+  "matplotlib",
+]
+
+[tool.setuptools]
+#py-modules = [
+#  "main",
+#  "utils",
+#  "gridmaps",
+#  "lidar",
+#  "csvstats"
+#]
+include-package-data = true
+package-data = {"da" = ["office_walls.csv"]}
+
+[tool.setuptools.packages.find]
+include = ["da"]
+
+[tool.mypy]
+mypy_path = ["stubs"]
+
+[project.scripts]
+exploration = "da.main:main"
+csvstats = "da.csvstats:main"
+
+[tool.ruff]
+ignore = ["E731", "E741"]
+line-length = 130

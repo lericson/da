@@ -1,0 +1,7 @@
+report_*.png
+completion_distances_*.txt
+.DS_Store
+__pycache__
+/.mypy_cache
+/*.egg-info
+tmp
