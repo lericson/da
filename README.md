@@ -92,7 +92,7 @@ more nearest frontier-like for the same value of λ.
   title={Information Gain Is Not All You Need},
   author={Ericson, Ludvig and Pedro, Jos{\'e} and Jensfelt, Patric},
   eprint={2504.01980},
-  eprinttype={arxiv}
+  eprinttype={arxiv},
   year={2025}
 }
 ```
