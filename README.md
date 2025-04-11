@@ -70,14 +70,12 @@ threads).
 
 ## Results
 
-+--------------------------------------+---------------+--------+
-| Algorithm                            | d_T (meters)  | Change |
-+--------------------------------------+---------------+--------+
-| `DistanceAdvantage` with predictions | 1435.9 ± 30.2 |     0% |
-| `DistanceAdvantage` w/o  predictions | 1602.9 ± 26.0 | +11.6% |
-| `NearestFrontier`                    | 1905.4 ± 54.4 | +32.7% |
-| `InformationGain`                    | 2014.2 ± 43.4 | +40.3% |
-+--------------------------------------+---------------+--------+
+| Algorithm                            | d_T (meters)  | Factor |
+|--------------------------------------|---------------|--------|
+| `DistanceAdvantage` with predictions | 1435.9 ± 30.2 |  1.000 |
+| `DistanceAdvantage` w/o  predictions | 1602.9 ± 26.0 |  1.116 |
+| `NearestFrontier`                    | 1905.4 ± 54.4 |  1.327 |
+| `InformationGain`                    | 2014.2 ± 43.4 |  1.403 |
 
 In other words, the results agree with those in the paper, except for
 information gain which is better here because this implementation
