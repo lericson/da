@@ -1,10 +1,14 @@
-# Reference Implementation of Distance Advantage Exploration
+# Minimal Reproduction of Distance Advantage Exploration
+
+
 
 This repository is a distilled version of the algorithms developed for the
 paper ``Information Gain Is Not All You Need''.
 
-Note that though the code is not identical, the results stay mostly the same.
-The major differences are:
+Note that though the code is not identical to the code that was used to produce
+the paper, the results stay mostly the same. This version is optimized for
+readability and reproducibility rather than exact duplication. Key differences
+include:
 
  1. Path planning is 4-connected whereas the paper was 8-connected. To
     compensate for this, a line-of-sight path simplifier is applied. Briefly,
@@ -20,36 +24,44 @@ The major differences are:
 
 ## Installation
 
-    git clone https://git.lericson.se/da.git
-    cd da
-    python3.12 -m venv env
-    ./env/bin/pip install -e .
+```bash
+git clone https://git.lericson.se/da.git
+cd da
+python3.12 -m venv env
+./env/bin/pip install -e .
+```
 
 ## Running
 
-The main file is appropriately called `main.py`, run it with:
+The main file is appropriately called `main.py`, it is invoked with the
+`exploration` script:
 
-    ./env/bin/exploration
+```bash
+./env/bin/exploration
+```
 
-It will output a bunch of files called things like `report_i01_t0000.png`. Each
-of these is a plot showing the state of exploration and the planner at that
-start location and time step.
+This will output images like `report_i01_t0000.png`. Each of these is a plot
+showing the state of exploration and the planner at that start location and
+time step.
 
 The default algorithm is distance advantage, a few baselines are also
 implemented:
 
-    ./env/bin/exploration --algorithm=NearestFrontier
-
-    ./env/bin/exploration --algorithm=InformationGain
+```bash
+./env/bin/exploration --algorithm=NearestFrontier
+./env/bin/exploration --algorithm=InformationGain
+```
 
 All methods can also be run without predictions by specifying
 `predictions=False`.
 
 You can also use GNU parallel to run many instances in parallel (or sequence):
 
-    parallel -j12 NUMBA_NUM_THREADS=2 ./env/bin/exploration \
-      ::: --algorithm={DistanceAdvantage,NearestFrontier,InformationGain} \
-      ::: --start-locations=[{1..10}]
+```bash
+parallel -j12 NUMBA_NUM_THREADS=2 ./env/bin/exploration \
+  ::: --algorithm={DistanceAdvantage,NearestFrontier,InformationGain} \
+  ::: --start-locations=[{1..10}]
+```
 
 `NUMBA_NUM_THREADS` controls how many parallel BFS searches are performed for
 distance advantage, otherwise it does nothing. `-j12` specifies how many jobs
@@ -72,3 +84,15 @@ information gain which is better here because this implementation
 underestimates the information gain, as it only counts information gain for a
 single vertex, not along a path as the paper does. This changes its behavior to
 more nearest frontier-like for the same value of λ.
+
+## Citation
+
+```bibtex
+@article{ericson2025da,
+  title={Information Gain Is Not All You Need},
+  author={Ericson, Ludvig and Pedro, Jos{\'e} and Jensfelt, Patric},
+  eprint={2504.01980},
+  eprinttype={arxiv}
+  year={2025}
+}
+```
