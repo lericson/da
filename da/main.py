@@ -156,11 +156,13 @@ class World:
         # Set exterior to background label (i.e. occupied)
         grid_labels[grid_labels == exterior_label] = 0
 
-        # Find largest interior component
+        # interior is the largest connected component.
         interior_label = np.argmax(np.bincount(grid_labels[0 < grid_labels]))
 
         interior = grid_labels == interior_label
-        grid[grid_labels != interior_label] = CellState.UNKNOWN
+        # outside(x) = not occupied(x) and not interior(x)
+        outside = (grid_labels != 0) & (grid_labels != interior_label)
+        grid[outside] = CellState.UNKNOWN
 
         start_xs, start_ys = permute_nonzero(interior, rng=rng)
         start_locations = list(zip(start_xs, start_ys))
