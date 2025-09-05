@@ -42,7 +42,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from importlib import resources
-from typing import IO, Any, Callable, Generator, List, Mapping, Sequence
+from typing import IO, Any, Callable, Generator, Mapping, Sequence
 from warnings import warn
 
 import numpy as np
@@ -309,8 +309,8 @@ class Algorithm:
     frontier_scores: Mapping[CellIndex, float]
 
     # Path plan
-    unrefined_path: List[CellIndex]
-    planned_path: List[CellIndex]
+    unrefined_path: list[CellIndex]
+    planned_path: list[CellIndex]
 
     def __init__(alg, body: Body, state: State) -> None:
         alg.body = body
