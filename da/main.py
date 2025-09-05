@@ -639,8 +639,12 @@ def run(alg: Algorithm, report_format: Callable[[str], str]) -> float:
             while True:
                 alg.plan()
                 alg.refine()
-                report(alg, savefig=report_format(f'_t{alg.state.step:04d}.png'))
-                alg.step_n(tunable('report_steps', 100))
+                if (report_steps := tunable('report_steps', 100)) == 1:
+                    report(alg)
+                    alg.execute()
+                else:
+                    report(alg, savefig=report_format(f'_t{alg.state.step:04d}.png'))
+                    alg.step_n(report_steps)
         except ExplorationFinished:
             print('Exploration finished!')
             return alg.state.cells_traveled*alg.body.world.scale
