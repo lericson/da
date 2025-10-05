@@ -11,6 +11,7 @@ from scipy import ndimage
 
 from .utils import tunable
 
+
 CellIndex: TypeAlias = tuple[int, int]
 
 CS_DTYPE = np.uint8
@@ -22,12 +23,14 @@ class CellState:
     OCCUPIED = CS_DTYPE(0b100)
     MAXIMUM  = OCCUPIED
 
+
 # Numba things
 CS_NOT_SET  = CellState.NOT_SET
 CS_UNKNOWN  = CellState.UNKNOWN
 CS_FREE     = CellState.FREE
 CS_OCCUPIED = CellState.OCCUPIED
 CS_MAXIMUM  = CS_OCCUPIED
+
 
 def neighbors_by_level(rank=5):
     levels = [[] for _ in range(2*rank + 1)]
@@ -36,7 +39,23 @@ def neighbors_by_level(rank=5):
         levels[level].append((dx, dy))
     return levels
 
+
 NEIGHBORS_BY_LEVEL = neighbors_by_level()
+
+
+def decimate(mask):
+    even = slice(0, None, 2)
+    odd  = slice(1, None, 2)
+    mask[0:-1:2,  odd] &= ~mask[1:  :2,  odd]
+    mask[2:-1:2,  odd] &= ~mask[1:-2:2,  odd]
+    mask[1:  :2, even] &= ~mask[0:-1:2, even]
+    mask[1:-2:2, even] &= ~mask[2:-1:2, even]
+    mask[ odd, 0:-1:2] &= ~mask[ odd, 1:  :2]
+    mask[ odd, 2:-1:2] &= ~mask[ odd, 1:-2:2]
+    mask[even, 1:  :2] &= ~mask[even, 0:-1:2]
+    mask[even, 1:-2:2] &= ~mask[even, 2:-1:2]
+    return mask
+
 
 
 class Gridmap(np.ndarray):
@@ -160,18 +179,9 @@ class Gridmap(np.ndarray):
             frontiers = ndimage.binary_dilation(frontiers, mask=mask, iterations=dilate_frontiers)
 
         # Frontier decimation
-        if not tunable('decimate_frontiers', True):
-            return frontiers
-        even = slice(0, None, 2)
-        odd  = slice(1, None, 2)
-        frontiers[0:-1:2,  odd] &= ~frontiers[1:  :2,  odd]
-        frontiers[2:-1:2,  odd] &= ~frontiers[1:-2:2,  odd]
-        frontiers[1:  :2, even] &= ~frontiers[0:-1:2, even]
-        frontiers[1:-2:2, even] &= ~frontiers[2:-1:2, even]
-        frontiers[ odd, 0:-1:2] &= ~frontiers[ odd, 1:  :2]
-        frontiers[ odd, 2:-1:2] &= ~frontiers[ odd, 1:-2:2]
-        frontiers[even, 1:  :2] &= ~frontiers[even, 0:-1:2]
-        frontiers[even, 1:-2:2] &= ~frontiers[even, 2:-1:2]
+        if tunable('decimate_frontiers', True):
+            frontiers = decimate(frontiers)
+
         return frontiers
 
     def frontier_cells(grid: Gridmap, *, current: CellIndex) -> list[CellIndex]:

@@ -375,6 +375,32 @@ class Algorithm:
             assert 1 < len(alg.planned_path)
             alg.execute()
 
+    def find_nearest_free_cell(alg: Algorithm) -> CellIndex:
+        st = alg.state
+        for vs in st.grid.neighbors_by_level(u := st.position, state=CellState.FREE):
+            if (vs := [v for v in vs if alg.body.line_of_sight(v)]):
+                return min(vs, key=lambda v: np.linalg.norm(np.r_[u] - v))
+        raise ValueError('no line-of-sight neighbor found')
+
+    def find_nearest_frontiers(alg: Algorithm) -> list[CellIndex]:
+
+        d = alg.current_distances
+
+        frontiers = [u for u in alg.frontier_cells if 1 < d[u]]
+        if not frontiers:
+            return []
+
+        nearest_frontiers = sorted(frontiers, key=d.__getitem__)
+
+        max_frontiers         = tunable('max_frontiers', 500)
+        max_frontier_distance = tunable('max_frontier_distance', 61)
+
+        cutoff = bisect_right(nearest_frontiers, max_frontier_distance, key=d.__getitem__) + 1
+        cutoff = min(cutoff, max_frontiers)
+        del nearest_frontiers[cutoff:]
+
+        return nearest_frontiers
+
 
 class NearestFrontier(Algorithm):
 
@@ -385,12 +411,10 @@ class NearestFrontier(Algorithm):
                 for u in alg.frontier_cells
                 if 1 < alg.current_distances[u]}
 
-    def find_nearest_free_cell(alg: NearestFrontier) -> CellIndex:
-        st = alg.state
-        for vs in st.grid.neighbors_by_level(u := st.position, state=CellState.FREE):
-            if (vs := [v for v in vs if alg.body.line_of_sight(v)]):
-                return min(vs, key=lambda v: np.linalg.norm(np.r_[u] - v))
-        raise ValueError('no line-of-sight neighbor found')
+    def determine_frontiers(alg: NearestFrontier) -> None:
+        grid = alg.state.grid
+        alg.frontier_cells = grid.frontier_cells(current=alg.current_cell)
+        alg.frontier_mask = indices_mask(grid.shape, alg.frontier_cells)
 
     def plan(alg: NearestFrontier) -> None:
 
@@ -398,11 +422,11 @@ class NearestFrontier(Algorithm):
 
         alg.current_cell = alg.find_nearest_free_cell()
 
-        alg.frontier_cells = st.grid.frontier_cells(current=alg.current_cell)
+        alg.predicted_grid = alg.body.predict(st.grid)
 
-        alg.frontier_mask = indices_mask(st.grid.shape, alg.frontier_cells)
+        alg.determine_frontiers()
 
-        sol = st.grid.sssp(source=alg.current_cell, target_mask=alg.frontier_mask)
+        sol = alg.predicted_grid.sssp(source=alg.current_cell, target_mask=alg.frontier_mask)
 
         alg.current_distances = sol.distances
 
@@ -438,11 +462,9 @@ class DistanceAdvantage(NearestFrontier):
 
         alg.current_cell = alg.find_nearest_free_cell()
 
-        alg.frontier_cells = st.grid.frontier_cells(current=alg.current_cell)
-
-        alg.frontier_mask = indices_mask(st.grid.shape, alg.frontier_cells)
-
         alg.predicted_grid = alg.body.predict(st.grid)
+
+        alg.determine_frontiers()
 
         cell_coords = np.stack(meshgrid_shape(alg.predicted_grid.shape, indexing='ij'), axis=-1)
         cell_dists = np.linalg.norm(cell_coords - alg.current_cell, axis=-1, ord=np.inf)
@@ -451,8 +473,7 @@ class DistanceAdvantage(NearestFrontier):
         alg.source_mask  = cell_dists < tunable('max_target_distance', 61)
         alg.source_mask &= alg.predicted_grid == CellState.FREE
 
-        sol = alg.predicted_grid.sssp(source=alg.current_cell,
-                                      target_mask=alg.source_mask | alg.frontier_mask)
+        sol = alg.predicted_grid.sssp(source=alg.current_cell, target_mask=alg.source_mask | alg.frontier_mask)
 
         alg.current_distances = sol.distances
 
@@ -472,25 +493,6 @@ class DistanceAdvantage(NearestFrontier):
         alg.max_score_cell = max(alg.frontier_scores, key=alg.frontier_scores.__getitem__)
 
         alg.planned_path = [st.position] + sol.path_to(alg.max_score_cell, key=None)
-
-    def find_nearest_frontiers(alg: DistanceAdvantage) -> list[CellIndex]:
-
-        d = alg.current_distances
-
-        frontiers = [u for u in alg.frontier_cells if 1 < d[u]]
-        if not frontiers:
-            return []
-
-        nearest_frontiers = sorted(frontiers, key=d.__getitem__)
-
-        max_frontiers         = tunable('max_frontiers', 500)
-        max_frontier_distance = tunable('max_frontier_distance', 61)
-
-        cutoff = bisect_right(nearest_frontiers, max_frontier_distance, key=d.__getitem__) + 1
-        cutoff = min(cutoff, max_frontiers)
-        del nearest_frontiers[cutoff:]
-
-        return nearest_frontiers
 
     def find_frontier_scores(alg: DistanceAdvantage) -> dict[CellIndex, float]:
         if not (nearest_frontiers := alg.find_nearest_frontiers()):
@@ -537,6 +539,90 @@ class InformationGainSquareRoot(InformationGain):
     score_formula = lambda a, g, d: (a.lambda_*np.sqrt(g) - d) * a.body.world.scale
 
 
+def tsp_path(start: CellIndex, distances: Mapping[CellIndex, np.ndarray]) -> tuple[list[CellIndex], np.ndarray]:
+    import networkx as nx
+    from itertools import pairwise, combinations, product
+
+    vertices = set(distances) - {start}
+
+    G: nx.Graph[CellIndex] = nx.Graph()
+    for a, b in combinations(vertices, 2):
+        G.add_edge(a, b, weight=distances[a][b])
+
+    # Find the optimal tour (approximately).
+    tour = nx.approximation.christofides(G)
+
+    # The optimal path is found by cutting the tour's most expensive edge u-v
+    # and inserting an edge start-v. The tour is a cycle and is valid in either
+    # direction, but the path is directed; must also consider the "flipped"
+    # tour (i.e., insert an edge start-u instead.)
+    def cost_decrease_by_cut(t):
+        cut_index, flip = t
+        u, v = tour[cut_index-1:cut_index+1]
+        return distances[u][v] - distances[start][u if flip else v]
+    cuts = product(range(1, len(tour)), (False, True))
+    cut_index, flip = max(cuts, key=cost_decrease_by_cut)
+    path = tour[cut_index:-1] + tour[:cut_index]
+    if flip:
+        path = path[::-1]
+
+    path = [start] + path
+    costs = np.cumsum([distances[s][t] for s, t in pairwise(path)])
+    return path, costs
+
+
+class TravelingSalesman(NearestFrontier):
+    """TSP planner similar to Kulich et al [1].
+
+    Note that there is no clustering going on, unlike [1].
+
+    [1] M. Kulich, J. Faigl and L. Přeučil, "On distance utility in the
+        exploration task," IEEE International Conference on Robotics and
+        Automation, 2011.
+    """
+
+    short_name = 'tsp'
+
+    def predicted_boundary_mask(alg: TravelingSalesman) -> Gridmap:
+        alg.predicted_grid
+        pred_free     = alg.predicted_grid == CellState.FREE
+        pred_occupied = alg.predicted_grid == CellState.OCCUPIED
+        unknownish    = (alg.state.grid & CellState.UNKNOWN) != 0
+        boundary      = pred_free & ndimage.binary_dilation(pred_occupied)
+        from da.gridmaps import decimate
+        return decimate(boundary & unknownish)
+
+    def predicted_boundary_cells(alg: TravelingSalesman) -> list[CellIndex]:
+        xs, ys = np.nonzero(alg.predicted_boundary_mask())
+        return list(zip(xs, ys))
+
+    def determine_frontiers(alg: TravelingSalesman) -> None:
+        super().determine_frontiers()
+        # dp(a -> b) = dbar(b) - dbar(a) = -dp(b -> a)
+        # c(a -> b) = d(a -> b) - dp(a -> b)
+        # c(a -> b) = d(a -> b) - dbar(b)
+        #alg.frontier_cells += alg.predicted_boundary_cells()
+        #alg.frontier_mask = indices_mask(alg.state.grid.shape, alg.frontier_cells)
+
+    def find_frontier_scores(alg: TravelingSalesman) -> dict[CellIndex, float]:
+
+        if not (nearest_frontiers := alg.find_nearest_frontiers()):
+            return {}
+
+        grid = alg.predicted_grid
+
+        solutions = grid.mssp(sources=nearest_frontiers, target_mask=alg.frontier_mask)
+
+        distances = {u: sol.distances for u, sol in solutions.items()}
+        distances[alg.current_cell] = alg.current_distances
+
+        path, costs = tsp_path(alg.current_cell, distances)
+
+        alg.tsp_tour = path
+
+        return {vert: -cost for vert, cost in zip(path[1:], costs, strict=True)}
+
+
 def report(alg: Algorithm, *, savefig=False):
 
     from matplotlib import pyplot as plt
@@ -547,7 +633,7 @@ def report(alg: Algorithm, *, savefig=False):
 
     fig: plt.Figure  # type: ignore
     ax: plt.Axes  # type: ignore
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=tunable('figsize', (8, 4)))
     xs: Any
     ys: Any
 
@@ -578,10 +664,16 @@ def report(alg: Algorithm, *, savefig=False):
         plot_polylines([alg.planned_path], ec='C3')
         xs, ys = zip(*alg.planned_path)
         ax.scatter(xs, ys, fc='C3', lw=0, s=10)
+
     if hasattr(alg, 'unrefined_path'):
         plot_polylines([alg.unrefined_path], ec='C4')
         xs, ys = zip(*alg.unrefined_path)
         ax.scatter(xs, ys, fc='C4', lw=0, s=10)
+
+    if hasattr(alg, 'tsp_tour'):
+        plot_polylines([alg.tsp_tour], ec='C6')
+        xs, ys = zip(*alg.tsp_tour)
+        ax.scatter(xs, ys, fc='C6', lw=0, s=10)
 
     # For debugging sensor and gridmap rendering
     if tunable('debug_scan', False):
