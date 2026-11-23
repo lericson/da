@@ -161,6 +161,16 @@ class Gridmap(np.ndarray):
 
         target_mask = _homogenize_target_mask(grid.shape, targets=targets, target_mask=target_mask)
 
+        if tunable('fast_mean_distances', True):
+            # Same BFS as mssp, but each source only accumulates the sum and
+            # count of its target distances instead of keeping a full
+            # distance field and parent mask. Gives identical results.
+            sources = [(x, y) for (x, y) in sources]
+            sources_arr = np.array(sources, dtype=np.int64).reshape(-1, 2)
+            means = np.empty(len(sources), dtype=np.float64)
+            _mean_distances_numba(np.asarray(grid), target_mask, sources_arr, means)
+            return dict(zip(sources, means))
+
         solutions = grid.mssp(sources=sources, target_mask=target_mask)
 
         return {source: np.mean(sol.distances, where=target_mask & (0 < sol.distances))
@@ -312,6 +322,38 @@ def _pairwise_numba(grid_array, cells, out) -> None:
                     dist[vx, vy] = dist[x, y] + 1
                     queue[tail, 0], queue[tail, 1] = vx, vy
                     tail += 1
+
+
+@nb.njit(parallel=True)
+def _mean_distances_numba(grid_array, target_mask, sources, out) -> None:
+    n = len(sources)
+    xlen, ylen = grid_array.shape
+    num_targets = np.count_nonzero(target_mask)
+    for i in nb.prange(n):
+        dist = np.zeros((xlen, ylen), dtype=np.int64)
+        queue = np.empty((xlen*ylen + 1, 2), dtype=np.int64)
+        head, tail = 0, 1
+        queue[0, 0], queue[0, 1] = sources[i, 0], sources[i, 1]
+        dist[sources[i, 0], sources[i, 1]] = 1
+        remaining = num_targets
+        total = 0
+        count = 0
+        while head < tail:
+            x, y = queue[head, 0], queue[head, 1]
+            head += 1
+            if target_mask[x, y]:
+                total += dist[x, y]
+                count += 1
+                remaining -= 1
+                if remaining == 0:
+                    break
+            for j in range(4):
+                vx, vy = x + ADJ[j][0], y + ADJ[j][1]
+                if 0 <= vx < xlen and 0 <= vy < ylen and grid_array[vx, vy] == CS_FREE and dist[vx, vy] == 0:
+                    dist[vx, vy] = dist[x, y] + 1
+                    queue[tail, 0], queue[tail, 1] = vx, vy
+                    tail += 1
+        out[i] = total / count if count > 0 else np.nan
 
 
 ADJ = ((-1, 0), (+1, 0), (0, -1), (0, +1))
