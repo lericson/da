@@ -539,18 +539,56 @@ class InformationGainSquareRoot(InformationGain):
     score_formula = lambda a, g, d: (a.lambda_*np.sqrt(g) - d) * a.body.world.scale
 
 
-def tsp_path(start: CellIndex, distances: Mapping[CellIndex, np.ndarray]) -> tuple[list[CellIndex], np.ndarray]:
+def christofides_tour(D: np.ndarray, nodes: Sequence[int]) -> list[int]:
+    "Closed tour over `nodes` (indices into D), first == last."
     import networkx as nx
-    from itertools import pairwise, combinations, product
+    from itertools import combinations
+    G: nx.Graph[int] = nx.Graph()
+    for a, b in combinations(nodes, 2):
+        G.add_edge(a, b, weight=D[a, b])
+    return nx.approximation.christofides(G)
 
-    vertices = set(distances) - {start}
 
-    G: nx.Graph[CellIndex] = nx.Graph()
-    for a, b in combinations(vertices, 2):
-        G.add_edge(a, b, weight=distances[a][b])
+def lkh_tour(D: np.ndarray, nodes: Sequence[int]) -> list[int]:
+    "Closed tour over `nodes` (indices into D) by LKH-3 via elkai, first == last."
+    from elkai import _elkai
+    nodes = list(nodes)
+    sub = D[np.ix_(nodes, nodes)]
+    params = ('RUNS = 1\n'
+              'PROBLEM_FILE = :stdin:\n'
+              'TRACE_LEVEL = 0\n'
+              'SUBGRADIENT = NO\n'
+              f'MAX_TRIALS = {tunable("lkh_max_trials", 50)}\n'
+              f'SEED = {tunable("lkh_seed", 1)}\n')
+    problem = (f'TYPE : TSP\nDIMENSION : {len(nodes)}\n'
+               'EDGE_WEIGHT_TYPE : EXPLICIT\nEDGE_WEIGHT_FORMAT : FULL_MATRIX\n'
+               'EDGE_WEIGHT_SECTION\n' + '\n'.join(' '.join(map(str, row)) for row in sub.tolist()) + '\n')
+    tour = [nodes[i - 1] for i in _elkai.solve_problem(params, problem)]
+    return tour + tour[:1]
 
-    # Find the optimal tour (approximately).
-    tour = nx.approximation.christofides(G)
+
+def solve_tour(D: np.ndarray, nodes: Sequence[int]) -> list[int]:
+    nodes = list(nodes)
+    if len(nodes) <= 3:
+        # Every tour is optimal (and the solvers dislike tiny instances.)
+        return nodes + nodes[:1]
+    solver = tunable('tsp_solver', 'christofides')
+    if solver == 'christofides':
+        return christofides_tour(D, nodes)
+    elif solver == 'lkh':
+        return lkh_tour(D, nodes)
+    raise ValueError(f'unknown tsp_solver {solver!r}')
+
+
+def tsp_cut_path(D: np.ndarray) -> list[int]:
+    """Original approach: closed tour over the frontiers, then cut into a path.
+
+    Node 0 is the start. The tour is over nodes 1..n-1 only, and the start is
+    attached afterwards by cutting the tour's best edge.
+    """
+    from itertools import product
+
+    tour = solve_tour(D, range(1, len(D)))
 
     # The optimal path is found by cutting the tour's most expensive edge u-v
     # and inserting an edge start-v. The tour is a cycle and is valid in either
@@ -559,16 +597,39 @@ def tsp_path(start: CellIndex, distances: Mapping[CellIndex, np.ndarray]) -> tup
     def cost_decrease_by_cut(t):
         cut_index, flip = t
         u, v = tour[cut_index-1:cut_index+1]
-        return distances[u][v] - distances[start][u if flip else v]
+        return D[u, v] - D[0, u if flip else v]
     cuts = product(range(1, len(tour)), (False, True))
     cut_index, flip = max(cuts, key=cost_decrease_by_cut)
     path = tour[cut_index:-1] + tour[:cut_index]
     if flip:
         path = path[::-1]
 
-    path = [start] + path
-    costs = np.cumsum([distances[s][t] for s, t in pairwise(path)])
-    return path, costs
+    return [0] + path
+
+
+def tsp_open_path(D: np.ndarray) -> list[int]:
+    """Open TSP path from node 0 through all other nodes, as in Kulich et al.
+
+    The open problem is turned into a closed one with an auxiliary node T at
+    distance 0 from the start and a large constant M from every other node. T
+    then always sits between the start and the last node of the tour, so the
+    closed tour costs (open path + M) and minimizing one minimizes the other.
+    """
+    n = len(D)
+    if n <= 2:
+        return list(range(n))
+    big = int(D.max()) * n + 1
+    A = np.full((n + 1, n + 1), big, dtype=np.int64)
+    A[:n, :n] = D
+    A[n, 0] = A[0, n] = 0
+    A[n, n] = 0
+    tour = solve_tour(A, range(n + 1))[:-1]
+    r = tour.index(0)
+    tour = tour[r:] + tour[:r]
+    if tour[1] == n:
+        tour = tour[:1] + tour[1:][::-1]
+    assert tour[-1] == n, 'auxiliary node must close the tour'
+    return tour[:-1]
 
 
 class TravelingSalesman(NearestFrontier):
@@ -609,18 +670,47 @@ class TravelingSalesman(NearestFrontier):
         if not (nearest_frontiers := alg.find_nearest_frontiers()):
             return {}
 
-        grid = alg.predicted_grid
+        nodes = [alg.current_cell, *nearest_frontiers]
 
-        solutions = grid.mssp(sources=nearest_frontiers, target_mask=alg.frontier_mask)
+        D = alg.tsp_distances(nodes)
 
-        distances = {u: sol.distances for u, sol in solutions.items()}
-        distances[alg.current_cell] = alg.current_distances
+        if tunable('tsp_open', False):
+            order = tsp_open_path(D)
+        else:
+            order = tsp_cut_path(D)
 
-        path, costs = tsp_path(alg.current_cell, distances)
+        path = [nodes[i] for i in order]
+        costs = np.cumsum(D[order[:-1], order[1:]])
 
         alg.tsp_tour = path
 
-        return {vert: -cost for vert, cost in zip(path[1:], costs, strict=True)}
+        return {vert: -float(cost) for vert, cost in zip(path[1:], costs, strict=True)}
+
+    def tsp_distances(alg: TravelingSalesman, nodes: Sequence[CellIndex]) -> np.ndarray:
+        """Path lengths (in cells) between all pairs of nodes.
+
+        tsp_distances='predicted' (default) measures paths through the
+        predicted map, i.e., also through unexplored space when predictions
+        are on. tsp_distances='known' measures paths through known free space
+        only, treating unexplored space as an obstacle, as in Kulich et al.
+        Pairs that are not connected through known free space fall back to
+        their predicted distance.
+        """
+        D_pred = alg.predicted_grid.pairwise_distances(nodes) - 1
+        assert (D_pred >= 0).all(), 'all nodes should be mutually reachable in the predicted map'
+
+        if (mode := tunable('tsp_distances', 'predicted')) == 'predicted':
+            return D_pred
+        elif mode != 'known':
+            raise ValueError(f'unknown tsp_distances {mode!r}')
+
+        known = alg.state.grid.copy()
+        known[alg.current_cell] = CellState.FREE
+        D = known.pairwise_distances(nodes) - 1
+        unreachable = D < 0
+        alg.tsp_num_unreachable = int(np.count_nonzero(unreachable))
+        D[unreachable] = D_pred[unreachable]
+        return D
 
 
 def report(alg: Algorithm, *, savefig=False):

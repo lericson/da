@@ -55,6 +55,21 @@ implemented:
 All methods can also be run without predictions by specifying
 `predictions=False`.
 
+There is also a TSP planner in the style of Kulich et al. (ICRA 2011), which
+needs the `tsp` extras (`./env/bin/pip install -e '.[tsp]'`):
+
+```bash
+./env/bin/exploration algorithm=TravelingSalesman max_frontiers=5000 max_frontier_distance=1000.0 \
+  'tsp_solver="lkh"' tsp_open=True 'tsp_distances="known"'
+```
+
+`tsp_solver` is `"christofides"` (default) or `"lkh"` (LKH-3 via elkai).
+`tsp_open=True` puts the robot's cell in the tour and solves an open path from
+it, instead of closing a tour over the frontiers and cutting it afterwards.
+`tsp_distances="known"` measures distances through known free space only,
+treating unexplored space as an obstacle; the default `"predicted"` measures
+them through the predicted map.
+
 You can also use GNU parallel to run many instances in parallel (or sequence):
 
 ```bash

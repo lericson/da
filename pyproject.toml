@@ -18,6 +18,9 @@ dependencies = [
   "matplotlib",
 ]
 
+[project.optional-dependencies]
+tsp = ["networkx", "elkai"]
+
 [tool.setuptools]
 #py-modules = [
 #  "main",

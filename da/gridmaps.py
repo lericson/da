@@ -137,6 +137,19 @@ class Gridmap(np.ndarray):
         _mssp_numba(grid, target_mask, *triplets)
         return {s: SSSPSolution(s, d, p) for s, d, p in zip(*triplets)}
 
+    def pairwise_distances(grid: Gridmap, cells: Iterable[CellIndex]) -> np.ndarray:
+        """BFS distances between every pair of `cells`, as an (n, n) matrix.
+
+        Same convention as mssp: a cell is at distance 1 from itself and 0
+        means unreachable. Equivalent to calling mssp with the cells as both
+        sources and targets, but only keeps the n×n entries needed rather than
+        n full distance fields and parent masks.
+        """
+        cells_arr = np.array([(x, y) for (x, y) in cells], dtype=np.int64).reshape(-1, 2)
+        out = np.zeros((len(cells_arr), len(cells_arr)), dtype=np.int64)
+        _pairwise_numba(np.asarray(grid), cells_arr, out)
+        return out
+
     def find_mean_distances(grid: Gridmap,
                             sources: Iterable[CellIndex],
                             targets: Iterable[CellIndex] | None = None,
@@ -268,6 +281,37 @@ def _sssp_numba(grid_array, target_mask, source, distances, parents) -> None:
 
             if distances[v] == dist_uv:
                 parents[*v, i] = True
+
+
+@nb.njit(parallel=True)
+def _pairwise_numba(grid_array, cells, out) -> None:
+    n = len(cells)
+    xlen, ylen = grid_array.shape
+    index = np.full((xlen, ylen), -1, dtype=np.int64)
+    for k in range(n):
+        index[cells[k, 0], cells[k, 1]] = k
+    for i in nb.prange(n):
+        dist = np.zeros((xlen, ylen), dtype=np.int64)
+        queue = np.empty((xlen*ylen + 1, 2), dtype=np.int64)
+        head, tail = 0, 1
+        queue[0, 0], queue[0, 1] = cells[i, 0], cells[i, 1]
+        dist[cells[i, 0], cells[i, 1]] = 1
+        remaining = n
+        while head < tail:
+            x, y = queue[head, 0], queue[head, 1]
+            head += 1
+            k = index[x, y]
+            if k >= 0 and out[i, k] == 0:
+                out[i, k] = dist[x, y]
+                remaining -= 1
+                if remaining == 0:
+                    break
+            for j in range(4):
+                vx, vy = x + ADJ[j][0], y + ADJ[j][1]
+                if 0 <= vx < xlen and 0 <= vy < ylen and grid_array[vx, vy] == CS_FREE and dist[vx, vy] == 0:
+                    dist[vx, vy] = dist[x, y] + 1
+                    queue[tail, 0], queue[tail, 1] = vx, vy
+                    tail += 1
 
 
 ADJ = ((-1, 0), (+1, 0), (0, -1), (0, +1))
