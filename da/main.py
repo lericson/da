@@ -563,8 +563,34 @@ def lkh_tour(D: np.ndarray, nodes: Sequence[int]) -> list[int]:
     problem = (f'TYPE : TSP\nDIMENSION : {len(nodes)}\n'
                'EDGE_WEIGHT_TYPE : EXPLICIT\nEDGE_WEIGHT_FORMAT : FULL_MATRIX\n'
                'EDGE_WEIGHT_SECTION\n' + '\n'.join(' '.join(map(str, row)) for row in sub.tolist()) + '\n')
-    tour = [nodes[i - 1] for i in _elkai.solve_problem(params, problem)]
+    tour = [nodes[i - 1] for i in _call_leaky(_elkai.solve_problem, params, problem)]
     return tour + tour[:1]
+
+
+def _call_leaky(f: Callable[..., Any], *args: Any) -> Any:
+    """Call f(*args), releasing any references to args that f leaks.
+
+    elkai 2.0.1's solve_problem fetches its arguments with PyObject_GetItem
+    and never releases them, so every call leaks the problem string, which
+    holds the whole distance matrix as text, at every planning step. Only
+    references that f actually leaked are released, so this is a no-op with
+    a fixed elkai.
+    """
+    import ctypes
+    import sys
+    decref = ctypes.pythonapi.Py_DecRef
+    decref.argtypes = [ctypes.py_object]
+    # Count references the same way before and after the call; anything that
+    # holds an argument while counting (a loop variable, zip's result tuple)
+    # would otherwise skew the difference and release a live reference.
+    counts = lambda: [sys.getrefcount(a) for a in args]
+    before = counts()
+    result = f(*args)
+    leaked = [m - n for m, n in zip(counts(), before)]
+    for a, k in zip(args, leaked):
+        if k == 1:
+            decref(a)
+    return result
 
 
 def solve_tour(D: np.ndarray, nodes: Sequence[int]) -> list[int]:
