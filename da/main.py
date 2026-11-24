@@ -51,8 +51,8 @@ from tqdm.auto import tqdm
 
 from . import lidar
 from .gridmaps import CellIndex, CellState, Gridmap, indices_mask
-from .utils import (edge_view, meshgrid_shape, parse_args, permute_nonzero,
-                    savetxt_row, tunable)
+from .utils import (edge_view, parse_args, permute_nonzero, savetxt_row,
+                    tunable)
 
 
 @dataclass(frozen=True)
@@ -446,6 +446,20 @@ class NearestFrontier(Algorithm):
         alg.planned_path = [st.position] + sol.path_to(alg.max_score_cell, key=None)
 
 
+def window_mask(shape: tuple[int, int], center: CellIndex, radius: float) -> np.ndarray:
+    """Mask of the cells whose max-norm distance to `center` is below `radius`.
+
+    Same as np.linalg.norm(coords - center, axis=-1, ord=np.inf) < radius over
+    all cell coordinates, without computing a norm for every cell in the map.
+    """
+    mask = np.zeros(shape, dtype=bool)
+    k = int(np.ceil(radius)) - 1  # |d| < radius <=> |d| <= k for integer d
+    if k >= 0:
+        (x, y) = center
+        mask[max(0, x - k):x + k + 1, max(0, y - k):y + k + 1] = True
+    return mask
+
+
 class DistanceAdvantage(NearestFrontier):
 
     short_name = 'da'
@@ -466,11 +480,11 @@ class DistanceAdvantage(NearestFrontier):
 
         alg.determine_frontiers()
 
-        cell_coords = np.stack(meshgrid_shape(alg.predicted_grid.shape, indexing='ij'), axis=-1)
-        cell_dists = np.linalg.norm(cell_coords - alg.current_cell, axis=-1, ord=np.inf)
-
-        # Source mask is the cells from which we compute the distances from.
-        alg.source_mask  = cell_dists < tunable('max_target_distance', 61)
+        # Source mask is the cells from which we compute the distances from:
+        # free cells within max_target_distance of the current cell in the
+        # max-norm, i.e., a square window around it.
+        alg.source_mask  = window_mask(alg.predicted_grid.shape, alg.current_cell,
+                                       tunable('max_target_distance', 61))
         alg.source_mask &= alg.predicted_grid == CellState.FREE
 
         sol = alg.predicted_grid.sssp(source=alg.current_cell, target_mask=alg.source_mask | alg.frontier_mask)
